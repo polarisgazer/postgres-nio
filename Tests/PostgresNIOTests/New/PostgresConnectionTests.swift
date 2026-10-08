@@ -420,6 +420,33 @@ import Synchronization
         }
     }
 
+    @Test func testAQueryWrittenAfterTheChannelClosedFailsInsteadOfWaitingForEver() async throws {
+        try await self.withAsyncTestingChannel { connection, channel in
+            try await channel.close()
+            try await channel.closeFuture.get()
+
+            let logger = self.logger
+            let (outcomes, outcomeSink) = AsyncStream.makeStream(of: String.self)
+            Task {
+                do {
+                    _ = try await connection.query("SELECT 1;", logger: logger)
+                    outcomeSink.yield("the query succeeded")
+                } catch let error as PSQLError {
+                    outcomeSink.yield("the query failed with \(error.code)")
+                } catch {
+                    outcomeSink.yield("the query failed with \(error)")
+                }
+            }
+            Task {
+                try? await Task.sleep(for: .seconds(5))
+                outcomeSink.yield("the query never ended")
+            }
+            var outcomeIterator = outcomes.makeAsyncIterator()
+            let outcome = await outcomeIterator.next()
+            #expect(outcome == "the query failed with clientClosedConnection")
+        }
+    }
+
     @Test func testIfServerJustClosesTheErrorReflectsThat() async throws {
         try await self.withAsyncTestingChannel { connection, channel in
             let logger = self.logger

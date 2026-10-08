@@ -258,9 +258,22 @@ public final class PostgresConnection: @unchecked Sendable {
             promise: promise
         )
 
-        self.channel.write(HandlerTask.extendedQuery(context), promise: nil)
+        self.write(HandlerTask.extendedQuery(context))
 
         return promise.futureResult
+    }
+
+    /// Writes a task to the channel, failing whatever the task carries if the channel cannot take it: a channel
+    /// that has closed and torn its pipeline down fails only the write's own promise, and a task written
+    /// without one is dropped, leaving its caller waiting for ever. It fails with the error the state machine
+    /// gives a task enqueued while the connection closes, so a task that reaches the channel just after the
+    /// teardown fails as one that reached it just before does.
+    private func write(_ task: HandlerTask) {
+        let promise = self.channel.eventLoop.makePromise(of: Void.self)
+        promise.futureResult.whenFailure { error in
+            task.failWithError(.clientClosedConnection(underlying: error))
+        }
+        self.channel.write(task, promise: promise)
     }
 
     // MARK: Prepared statements
@@ -275,7 +288,7 @@ public final class PostgresConnection: @unchecked Sendable {
             promise: promise
         )
 
-        self.channel.write(HandlerTask.extendedQuery(context), promise: nil)
+        self.write(HandlerTask.extendedQuery(context))
         return promise.futureResult.map { rowDescription in
             PSQLPreparedStatement(name: name, query: query, connection: self, rowDescription: rowDescription)
         }
@@ -291,7 +304,7 @@ public final class PostgresConnection: @unchecked Sendable {
             logger: logger,
             promise: promise)
 
-        self.channel.write(HandlerTask.extendedQuery(context), promise: nil)
+        self.write(HandlerTask.extendedQuery(context))
         return promise.futureResult
     }
 
@@ -299,7 +312,7 @@ public final class PostgresConnection: @unchecked Sendable {
         let promise = self.channel.eventLoop.makePromise(of: Void.self)
         let context = CloseCommandContext(target: target, logger: logger, promise: promise)
 
-        self.channel.write(HandlerTask.closeCommand(context), promise: nil)
+        self.write(HandlerTask.closeCommand(context))
         return promise.futureResult
     }
 
@@ -468,7 +481,7 @@ extension PostgresConnection {
             promise: promise
         )
 
-        self.channel.write(HandlerTask.extendedQuery(context), promise: nil)
+        self.write(HandlerTask.extendedQuery(context))
 
         do {
             return try await promise.futureResult.map({ $0.asyncSequence() }).get()
@@ -508,7 +521,7 @@ extension PostgresConnection {
             return (id: id, stream: stream)
         } onCancel: {
             let task = HandlerTask.cancelListening(channel, id)
-            self.channel.write(task, promise: nil)
+            self.write(task)
         }
     }
 
@@ -532,7 +545,7 @@ extension PostgresConnection {
         let (id, stream) = try await self.startListen(channel: channel)
         defer {
             let task = HandlerTask.cancelListening(channel, id)
-            self.channel.write(task, promise: nil)
+            self.write(task)
         }
         return try await consume(stream)
     }
@@ -554,7 +567,7 @@ extension PostgresConnection {
             logger: logger,
             promise: promise
         ))
-        self.channel.write(task, promise: nil)
+        self.write(task)
         do {
             return try await promise.futureResult
                 .map { $0.asyncSequence() }
@@ -589,7 +602,7 @@ extension PostgresConnection {
             logger: logger,
             promise: promise
         ))
-        self.channel.write(task, promise: nil)
+        self.write(task)
         do {
             return try await promise.futureResult
                 .map { $0.commandTag }
@@ -840,11 +853,11 @@ extension PostgresConnection {
         )
 
         let task = HandlerTask.startListening(listener)
-        self.channel.write(task, promise: nil)
+        self.write(task)
 
         listenContext.future.whenComplete { _ in
             let task = HandlerTask.cancelListening(channel, id)
-            self.channel.write(task, promise: nil)
+            self.write(task)
         }
 
         return listenContext

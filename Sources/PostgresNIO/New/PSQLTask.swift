@@ -7,6 +7,21 @@ enum HandlerTask: Sendable {
     case startListening(NotificationListener)
     case cancelListening(String, Int)
     case executePreparedStatement(PreparedStatementContext)
+
+    func failWithError(_ error: PSQLError) {
+        switch self {
+        case .extendedQuery(let context):
+            PSQLTask.extendedQuery(context).failWithError(error)
+        case .closeCommand(let context):
+            context.promise.fail(error)
+        case .startListening(let listener):
+            listener.failed(error)
+        case .cancelListening:
+            break
+        case .executePreparedStatement(let context):
+            context.promise.fail(error)
+        }
+    }
 }
 
 enum PSQLTask {
